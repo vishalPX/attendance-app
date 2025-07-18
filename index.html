@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barcode Attendance Scanner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module">
+        // Using a modern, well-supported library for barcode scanning
+        import { BrowserMultiFormatReader, NotFoundException } from 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/esm/index.js';
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .scanner-container video {
+            width: 100%;
+            height: auto;
+            border-radius: 0.5rem;
+            border: 2px solid #e5e7eb;
+        }
+        .scanner-container {
+            position: relative;
+        }
+        .laser {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background-color: red;
+            box-shadow: 0 0 10px red;
+            animation: scanning 2s infinite linear;
+            display: none; /* Hidden by default */
+        }
+        @keyframes scanning {
+            0% { top: 0; }
+            50% { top: calc(100% - 2px); }
+            100% { top: 0; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl bg-white rounded-xl shadow-lg p-6 md:p-8">
+        <div class="text-center mb-6">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Attendance Scanner</h1>
+            <p class="text-gray-500 mt-2">Point your camera at a barcode to log attendance.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <!-- Left Column: Scanner -->
+            <div class="scanner-section">
+                <div id="scanner-container" class="scanner-container bg-gray-200 rounded-lg overflow-hidden mb-4">
+                    <video id="video" playsinline></video>
+                    <div id="laser" class="laser"></div>
+                </div>
+                <div class="flex items-center justify-center space-x-4">
+                    <button id="startButton" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50">
+                        Start Scan
+                    </button>
+                    <button id="stopButton" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50" disabled>
+                        Stop Scan
+                    </button>
+                </div>
+                 <div id="status-message" class="text-center mt-4 text-gray-600"></div>
+            </div>
+
+            <!-- Right Column: Attendance List -->
+            <div class="attendance-section">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold">Attendance Log</h2>
+                    <button id="exportButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg text-sm transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50">
+                        Export CSV
+                    </button>
+                </div>
+                <div class="bg-gray-50 h-96 rounded-lg border border-gray-200 overflow-y-auto">
+                    <table class="w-full text-sm text-left">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100 sticky top-0">
+                            <tr>
+                                <th scope="col" class="px-6 py-3">#</th>
+                                <th scope="col" class="px-6 py-3">Student ID / Barcode</th>
+                                <th scope="col" class="px-6 py-3">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="attendance-log">
+                            <tr id="placeholder-row">
+                                <td colspan="3" class="text-center py-10 text-gray-400">No attendance recorded yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                 <p class="text-xs text-center text-gray-400 mt-2">Total Entries: <span id="entry-count">0</span></p>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import the necessary classes from the ZXing library
+        import { BrowserMultiFormatReader, NotFoundException } from 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.0/esm/index.js';
+
+        // DOM Elements
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const exportButton = document.getElementById('exportButton');
+        const attendanceLog = document.getElementById('attendance-log');
+        const placeholderRow = document.getElementById('placeholder-row');
+        const entryCount = document.getElementById('entry-count');
+        const videoElement = document.getElementById('video');
+        const laser = document.getElementById('laser');
+        const statusMessage = document.getElementById('status-message');
+
+        // State
+        let codeReader = null;
+        let attendanceData = []; // Array to store attendance records
+        let scannedCodes = new Set(); // Set to track unique codes for this session
+
+        // Initialize the barcode reader
+        function initCodeReader() {
+            codeReader = new BrowserMultiFormatReader();
+            console.log('ZXing code reader initialized');
+        }
+
+        // Start scanning function
+        async function startScanning() {
+            if (!codeReader) {
+                initCodeReader();
+            }
+
+            try {
+                // Request camera access and get a list of video input devices
+                const videoInputDevices = await codeReader.listVideoInputDevices();
+                if (videoInputDevices.length === 0) {
+                    statusMessage.textContent = 'No camera found.';
+                    return;
+                }
+
+                // Use the first available video device
+                const selectedDeviceId = videoInputDevices[0].deviceId;
+                statusMessage.textContent = 'Starting camera...';
+
+                // Start decoding from the video device
+                codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
+                    if (result) {
+                        handleScanResult(result.getText());
+                    }
+                    if (err && !(err instanceof NotFoundException)) {
+                        console.error(err);
+                        statusMessage.textContent = `Error: ${err.message}`;
+                    }
+                });
+
+                // Update UI
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                laser.style.display = 'block';
+                statusMessage.textContent = 'Scanning...';
+
+            } catch (err) {
+                console.error('Error initializing camera:', err);
+                statusMessage.textContent = 'Could not access camera. Please grant permission.';
+            }
+        }
+
+        // Stop scanning function
+        function stopScanning() {
+            if (codeReader) {
+                codeReader.reset();
+            }
+            // Update UI
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            laser.style.display = 'none';
+            statusMessage.textContent = 'Scanner stopped.';
+        }
+
+        // Handle the result of a scan
+        function handleScanResult(scannedText) {
+            if (!scannedCodes.has(scannedText)) {
+                // Play a success sound
+                const audio = new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU'+Array(1e3).join('123'));
+                audio.play();
+
+                // Get current timestamp
+                const now = new Date();
+                const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+                const record = {
+                    id: scannedText,
+                    time: timeString,
+                    timestamp: now.toISOString()
+                };
+
+                // Add to data and update UI
+                attendanceData.push(record);
+                scannedCodes.add(scannedText);
+                updateAttendanceLog();
+            } else {
+                 // Optionally, provide feedback that the code was already scanned
+                statusMessage.textContent = `Already scanned: ${scannedText}`;
+                setTimeout(() => {
+                    if(!stopButton.disabled) statusMessage.textContent = 'Scanning...';
+                }, 2000);
+            }
+        }
+
+        // Update the attendance log table in the UI
+        function updateAttendanceLog() {
+            // Remove placeholder if it exists
+            if (placeholderRow) {
+                placeholderRow.remove();
+            }
+            
+            // Clear existing log to prevent duplicates
+            attendanceLog.innerHTML = '';
+
+            // Add new rows from the end of the array (to show newest first)
+            attendanceData.slice().reverse().forEach((record, index) => {
+                const row = document.createElement('tr');
+                row.className = 'bg-white border-b';
+                row.innerHTML = `
+                    <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">${attendanceData.length - index}</td>
+                    <td class="px-6 py-4">${record.id}</td>
+                    <td class="px-6 py-4">${record.time}</td>
+                `;
+                attendanceLog.appendChild(row);
+            });
+            
+            entryCount.textContent = attendanceData.length;
+        }
+        
+        // Export data to CSV
+        function exportToCSV() {
+            if (attendanceData.length === 0) {
+                alert('No attendance data to export.');
+                return;
+            }
+
+            const headers = 'Entry,StudentID,Time,Timestamp\n';
+            const rows = attendanceData.map((record, index) => 
+                `${index + 1},${record.id},${record.time},${record.timestamp}`
+            ).join('\n');
+
+            const csvContent = headers + rows;
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            const date = new Date().toISOString().slice(0,10);
+            link.setAttribute('download', `attendance_log_${date}.csv`);
+            link.style.visibility = 'hidden';
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Event Listeners
+        startButton.addEventListener('click', startScanning);
+        stopButton.addEventListener('click', stopScanning);
+        exportButton.addEventListener('click', exportToCSV);
+
+        // Initial setup
+        initCodeReader();
+    </script>
+</body>
+</html>
