@@ -64,7 +64,7 @@
                         Stop Scan
                     </button>
                 </div>
-                 <div id="status-message" class="text-center mt-4 text-gray-600"></div>
+                 <div id="status-message" class="text-center mt-4 text-gray-600 font-medium">Ready to scan.</div>
             </div>
 
             <!-- Right Column: Attendance List -->
@@ -128,38 +128,62 @@
                 initCodeReader();
             }
 
+            // --- Permission Check ---
+            // First, check if the browser supports the Permissions API and query for camera permission.
+            if (navigator.permissions && navigator.permissions.query) {
+                try {
+                    const permissionStatus = await navigator.permissions.query({ name: 'camera' });
+                    if (permissionStatus.state === 'denied') {
+                        // If permission is denied, show a clear message and stop.
+                        statusMessage.innerHTML = 'Camera access denied. <br>Please go to your browser settings and allow camera access for this site.';
+                        return;
+                    }
+                } catch (error) {
+                    console.error("Could not query camera permission:", error);
+                    // If the query fails, we'll let the next step handle it gracefully.
+                }
+            }
+            // --- End of Permission Check ---
+
             try {
-                // Request camera access and get a list of video input devices
+                statusMessage.textContent = 'Requesting camera access...';
+                // This line will trigger the browser's permission prompt if it hasn't been granted or denied yet.
                 const videoInputDevices = await codeReader.listVideoInputDevices();
+                
                 if (videoInputDevices.length === 0) {
-                    statusMessage.textContent = 'No camera found.';
+                    statusMessage.textContent = 'No camera found on this device.';
                     return;
                 }
 
-                // Use the first available video device
                 const selectedDeviceId = videoInputDevices[0].deviceId;
                 statusMessage.textContent = 'Starting camera...';
 
-                // Start decoding from the video device
+                // This starts the video stream and the decoding process.
                 codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
                     if (result) {
                         handleScanResult(result.getText());
                     }
+                    // We only care about errors that are not 'NotFoundException', which happens on every frame without a barcode.
                     if (err && !(err instanceof NotFoundException)) {
                         console.error(err);
-                        statusMessage.textContent = `Error: ${err.message}`;
+                        statusMessage.textContent = `Scanning Error: ${err.message}`;
                     }
                 });
 
-                // Update UI
+                // Update UI to show that scanning is active.
                 startButton.disabled = true;
                 stopButton.disabled = false;
                 laser.style.display = 'block';
                 statusMessage.textContent = 'Scanning...';
 
             } catch (err) {
-                console.error('Error initializing camera:', err);
-                statusMessage.textContent = 'Could not access camera. Please grant permission.';
+                // This catch block will run if the user denies permission at the prompt, or if another error occurs.
+                console.error('Error during scanner initialization:', err);
+                if (err.name === 'NotAllowedError') {
+                     statusMessage.innerHTML = 'Camera access denied. <br>Please go to your browser settings and allow camera access for this site.';
+                } else {
+                    statusMessage.textContent = 'Could not start camera. Please ensure it is not in use by another app.';
+                }
             }
         }
 
@@ -172,7 +196,7 @@
             startButton.disabled = false;
             stopButton.disabled = true;
             laser.style.display = 'none';
-            statusMessage.textContent = 'Scanner stopped.';
+            statusMessage.textContent = 'Scanner stopped. Click "Start Scan" to begin again.';
         }
 
         // Handle the result of a scan
@@ -207,18 +231,19 @@
 
         // Update the attendance log table in the UI
         function updateAttendanceLog() {
-            // Remove placeholder if it exists
-            if (placeholderRow) {
-                placeholderRow.remove();
+            // Remove placeholder if it exists and we haven't done so already
+            const pRow = document.getElementById('placeholder-row');
+            if (pRow) {
+                pRow.remove();
             }
             
-            // Clear existing log to prevent duplicates
+            // Clear existing log to prevent duplicates when re-rendering
             attendanceLog.innerHTML = '';
 
             // Add new rows from the end of the array (to show newest first)
             attendanceData.slice().reverse().forEach((record, index) => {
                 const row = document.createElement('tr');
-                row.className = 'bg-white border-b';
+                row.className = 'bg-white border-b hover:bg-gray-50';
                 row.innerHTML = `
                     <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">${attendanceData.length - index}</td>
                     <td class="px-6 py-4">${record.id}</td>
@@ -233,13 +258,18 @@
         // Export data to CSV
         function exportToCSV() {
             if (attendanceData.length === 0) {
-                alert('No attendance data to export.');
+                // Using a custom message box instead of alert
+                statusMessage.textContent = "No attendance data to export.";
+                setTimeout(() => {
+                    if(!stopButton.disabled) statusMessage.textContent = 'Ready to scan.';
+                    else statusMessage.textContent = 'Scanning...';
+                }, 3000);
                 return;
             }
 
             const headers = 'Entry,StudentID,Time,Timestamp\n';
             const rows = attendanceData.map((record, index) => 
-                `${index + 1},${record.id},${record.time},${record.timestamp}`
+                `${index + 1},"${record.id.replace(/"/g, '""')}","${record.time}","${record.timestamp}"`
             ).join('\n');
 
             const csvContent = headers + rows;
@@ -267,3 +297,4 @@
     </script>
 </body>
 </html>
+
